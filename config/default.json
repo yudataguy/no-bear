@@ -1,0 +1,79 @@
+{
+  "drone_id": "drone-001",
+  "drone_name": "Drone Alpha",
+  "simulation_mode": false,
+  "safety": {
+    "low_battery_threshold_percent": 20.0,
+    "critical_battery_threshold_percent": 10.0,
+    "signal_loss_timeout_sec": 5.0,
+    "rth_on_signal_loss": true,
+    "rth_on_low_battery": true,
+    "emergency_land_on_critical_battery": true,
+    "geofence": {
+      "enabled": true,
+      "max_altitude_m": 120.0,
+      "max_distance_m": 1000.0,
+      "home_latitude": null,
+      "home_longitude": null,
+      "no_fly_zones": []
+    }
+  },
+  "communication": {
+    "mavlink_connection": "udp:127.0.0.1:14550",
+    "mavlink_baud_rate": 57600,
+    "heartbeat_interval_sec": 1.0,
+    "telemetry_rate_hz": 10.0,
+    "command_timeout_sec": 5.0,
+    "enable_encryption": false
+  },
+  "vision": {
+    "rgb_camera_id": 0,
+    "thermal_camera_id": 1,
+    "rgb_resolution": [1280, 720],
+    "thermal_resolution": [640, 480],
+    "processing_fps": 10.0,
+    "min_processing_fps": 3.0,
+    "max_processing_fps": 30.0,
+    "adaptive_fps_enabled": true,
+    "detection_confidence_threshold": 0.6,
+    "tracking_lost_timeout_sec": 5.0,
+    "enable_thermal": true,
+    "enable_rgb": true,
+    "fusion_mode": "weighted",
+    "fusion_weight_thermal": 0.6
+  },
+  "navigation": {
+    "default_altitude_m": 50.0,
+    "max_speed_ms": 15.0,
+    "approach_speed_ms": 5.0,
+    "waypoint_acceptance_radius_m": 5.0,
+    "heading_tolerance_deg": 5.0
+  },
+  "tracking": {
+    "default_pattern": "hover",
+    "orbit_radius_m": 30.0,
+    "orbit_speed_ms": 5.0,
+    "hover_altitude_m": 30.0,
+    "energy_aware_pattern_selection": true,
+    "wind_threshold_for_hover_ms": 5.0,
+    "min_tracking_duration_sec": 10.0
+  },
+  "logging": {
+    "level": "INFO",
+    "log_dir": "logs",
+    "max_log_size_mb": 100,
+    "max_log_files": 10,
+    "log_telemetry": true,
+    "log_video_frames": false,
+    "telemetry_log_rate_hz": 1.0
+  },
+  "ground_station": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "api_prefix": "/api/v1",
+    "enable_websocket": true,
+    "websocket_path": "/ws",
+    "cors_origins": ["*"],
+    "enable_auth": false
+  }
+}

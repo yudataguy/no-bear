@@ -1,0 +1,80 @@
+[project]
+name = "drone-flight-core"
+version = "0.1.0"
+description = "Comprehensive drone flight software with autonomous tracking capabilities"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Drone Flight Core Team"}
+]
+keywords = ["drone", "uav", "flight-controller", "mavlink", "autonomous"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
+
+dependencies = [
+    "pymavlink>=2.4.40",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "websockets>=12.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "structlog>=23.2.0",
+    "aiofiles>=23.2.0",
+    "asyncio>=3.4.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "maturin>=1.3.0",
+]
+simulation = [
+    "dronekit-sitl>=3.3.0",
+]
+thermal = [
+    "flirpy>=0.3.0",
+]
+
+[project.scripts]
+drone-core = "drone_flight_core.main:main"
+ground-station = "drone_flight_core.ground_station.server:main"
+
+[build-system]
+requires = ["maturin>=1.3,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "src"
+module-name = "drone_flight_core._rust_core"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "C4", "SIM"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
