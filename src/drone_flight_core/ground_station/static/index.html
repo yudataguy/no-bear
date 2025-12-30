@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Ground Station</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Drone Ground Station</h1>
+                <span id="drone-id" class="drone-id">--</span>
+            </div>
+            <div class="header-center">
+                <div class="connection-status" id="connection-status">
+                    <span class="status-dot disconnected"></span>
+                    <span class="status-text">Disconnected</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <span id="clock" class="clock">--:--:--</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel: Video & Map -->
+            <section class="panel video-panel">
+                <div class="panel-header">
+                    <h2>Video Feed</h2>
+                    <div class="video-controls">
+                        <button class="btn btn-sm" id="btn-rgb" onclick="switchCamera('rgb')">RGB</button>
+                        <button class="btn btn-sm" id="btn-thermal" onclick="switchCamera('thermal')">Thermal</button>
+                        <button class="btn btn-sm" id="btn-pip" onclick="togglePiP()">PiP</button>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img id="video-main" class="video-feed" src="" alt="Video Feed">
+                    <img id="video-pip" class="video-pip hidden" src="" alt="PiP Feed">
+                    <div class="video-overlay">
+                        <div class="video-info">
+                            <span id="video-fps">-- FPS</span>
+                            <span id="video-resolution">--x--</span>
+                        </div>
+                    </div>
+                    <!-- Detection Overlay -->
+                    <svg id="detection-overlay" class="detection-overlay"></svg>
+                </div>
+            </section>
+
+            <!-- Center Panel: Telemetry -->
+            <section class="panel telemetry-panel">
+                <div class="panel-header">
+                    <h2>Telemetry</h2>
+                    <span id="telemetry-rate" class="rate-indicator">-- Hz</span>
+                </div>
+
+                <!-- Flight State -->
+                <div class="telemetry-section">
+                    <h3>Flight Status</h3>
+                    <div class="status-grid">
+                        <div class="status-item state-indicator" id="flight-state">
+                            <span class="label">State</span>
+                            <span class="value">DISARMED</span>
+                        </div>
+                        <div class="status-item" id="armed-status">
+                            <span class="label">Armed</span>
+                            <span class="value">NO</span>
+                        </div>
+                        <div class="status-item" id="flight-mode">
+                            <span class="label">Mode</span>
+                            <span class="value">--</span>
+                        </div>
+                        <div class="status-item" id="mission-status">
+                            <span class="label">Mission</span>
+                            <span class="value">IDLE</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Position -->
+                <div class="telemetry-section">
+                    <h3>Position</h3>
+                    <div class="telemetry-grid">
+                        <div class="telemetry-item">
+                            <span class="label">Latitude</span>
+                            <span class="value" id="gps-lat">--</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Longitude</span>
+                            <span class="value" id="gps-lon">--</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Altitude</span>
+                            <span class="value" id="altitude">-- m</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Satellites</span>
+                            <span class="value" id="gps-sats">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Attitude -->
+                <div class="telemetry-section">
+                    <h3>Attitude</h3>
+                    <div class="attitude-display">
+                        <div class="attitude-indicator" id="attitude-indicator">
+                            <div class="horizon" id="horizon"></div>
+                            <div class="pitch-marks"></div>
+                            <div class="roll-indicator"></div>
+                        </div>
+                        <div class="attitude-values">
+                            <div class="telemetry-item">
+                                <span class="label">Roll</span>
+                                <span class="value" id="roll">--°</span>
+                            </div>
+                            <div class="telemetry-item">
+                                <span class="label">Pitch</span>
+                                <span class="value" id="pitch">--°</span>
+                            </div>
+                            <div class="telemetry-item">
+                                <span class="label">Yaw</span>
+                                <span class="value" id="yaw">--°</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Velocity -->
+                <div class="telemetry-section">
+                    <h3>Velocity</h3>
+                    <div class="telemetry-grid">
+                        <div class="telemetry-item">
+                            <span class="label">Ground Speed</span>
+                            <span class="value" id="ground-speed">-- m/s</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Climb Rate</span>
+                            <span class="value" id="climb-rate">-- m/s</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Heading</span>
+                            <span class="value" id="heading">--°</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Battery -->
+                <div class="telemetry-section">
+                    <h3>Battery</h3>
+                    <div class="battery-display">
+                        <div class="battery-bar-container">
+                            <div class="battery-bar" id="battery-bar" style="width: 0%"></div>
+                        </div>
+                        <div class="battery-info">
+                            <span id="battery-percent">--%</span>
+                            <span id="battery-voltage">-- V</span>
+                            <span id="battery-current">-- A</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Controls & Alerts -->
+            <section class="panel control-panel">
+                <!-- Controls -->
+                <div class="panel-header">
+                    <h2>Controls</h2>
+                </div>
+
+                <div class="control-section">
+                    <h3>Flight Commands</h3>
+                    <div class="control-grid">
+                        <button class="btn btn-arm" id="btn-arm" onclick="sendCommand('ARM')">
+                            ARM
+                        </button>
+                        <button class="btn btn-disarm" id="btn-disarm" onclick="sendCommand('DISARM')">
+                            DISARM
+                        </button>
+                        <button class="btn btn-takeoff" id="btn-takeoff" onclick="showTakeoffDialog()">
+                            TAKEOFF
+                        </button>
+                        <button class="btn btn-land" id="btn-land" onclick="sendCommand('LAND')">
+                            LAND
+                        </button>
+                        <button class="btn btn-rth" id="btn-rth" onclick="sendCommand('RTH')">
+                            RTH
+                        </button>
+                        <button class="btn btn-hold" id="btn-hold" onclick="sendCommand('HOLD')">
+                            HOLD
+                        </button>
+                    </div>
+                    <div class="emergency-controls">
+                        <button class="btn btn-emergency" id="btn-emergency" onclick="confirmEmergency()">
+                            EMERGENCY STOP
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Mission Controls -->
+                <div class="control-section">
+                    <h3>Mission</h3>
+                    <div class="mission-controls">
+                        <select id="mission-select" class="select-input">
+                            <option value="">Select Mission</option>
+                        </select>
+                        <div class="mission-buttons">
+                            <button class="btn btn-sm" onclick="loadMission()">Load</button>
+                            <button class="btn btn-sm btn-start" onclick="startMission()">Start</button>
+                            <button class="btn btn-sm btn-pause" onclick="pauseMission()">Pause</button>
+                            <button class="btn btn-sm btn-abort" onclick="abortMission()">Abort</button>
+                        </div>
+                        <div class="mission-progress">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="mission-progress" style="width: 0%"></div>
+                            </div>
+                            <span id="mission-waypoint">Waypoint: --/--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Go To -->
+                <div class="control-section">
+                    <h3>Go To Position</h3>
+                    <div class="goto-form">
+                        <div class="form-row">
+                            <label>Lat:</label>
+                            <input type="number" id="goto-lat" step="0.000001" placeholder="37.7749">
+                        </div>
+                        <div class="form-row">
+                            <label>Lon:</label>
+                            <input type="number" id="goto-lon" step="0.000001" placeholder="-122.4194">
+                        </div>
+                        <div class="form-row">
+                            <label>Alt:</label>
+                            <input type="number" id="goto-alt" value="50" step="1" placeholder="50">
+                            <span class="unit">m</span>
+                        </div>
+                        <button class="btn btn-goto" onclick="goToPosition()">GO TO</button>
+                    </div>
+                </div>
+
+                <!-- Tracking Controls -->
+                <div class="control-section">
+                    <h3>Tracking</h3>
+                    <div class="tracking-controls">
+                        <div class="tracking-status">
+                            <span class="label">Status:</span>
+                            <span class="value" id="tracking-status">Inactive</span>
+                        </div>
+                        <div class="tracking-target">
+                            <span class="label">Target:</span>
+                            <span class="value" id="tracking-target">None</span>
+                        </div>
+                        <div class="pattern-select">
+                            <label>Pattern:</label>
+                            <select id="tracking-pattern" class="select-input">
+                                <option value="hover">Hover</option>
+                                <option value="orbit">Orbit</option>
+                            </select>
+                        </div>
+                        <div class="tracking-buttons">
+                            <button class="btn btn-sm" onclick="setTrackingPattern()">Set Pattern</button>
+                            <button class="btn btn-sm btn-stop" onclick="stopTracking()">Stop Tracking</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Panel: Alerts & Detections -->
+        <section class="bottom-panel">
+            <div class="alerts-panel">
+                <div class="panel-header">
+                    <h2>Alerts & Detections</h2>
+                    <div class="alert-controls">
+                        <span id="alert-count" class="alert-badge">0</span>
+                        <button class="btn btn-sm" onclick="clearAlerts()">Clear</button>
+                    </div>
+                </div>
+                <div class="alerts-container" id="alerts-container">
+                    <!-- Alerts will be inserted here -->
+                </div>
+            </div>
+
+            <div class="detections-panel">
+                <div class="panel-header">
+                    <h2>Active Detections</h2>
+                </div>
+                <div class="detections-list" id="detections-list">
+                    <!-- Detections will be inserted here -->
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Dialogs -->
+    <div id="dialog-overlay" class="dialog-overlay hidden">
+        <div id="dialog" class="dialog">
+            <div class="dialog-header">
+                <h3 id="dialog-title">Dialog</h3>
+                <button class="dialog-close" onclick="closeDialog()">&times;</button>
+            </div>
+            <div class="dialog-content" id="dialog-content">
+                <!-- Dynamic content -->
+            </div>
+            <div class="dialog-actions" id="dialog-actions">
+                <!-- Dynamic actions -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/telemetry.js"></script>
+    <script src="/static/js/controls.js"></script>
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

@@ -2,7 +2,8 @@
 Ground station server with REST and WebSocket APIs.
 
 Provides external API access to drone control, telemetry,
-and mission management.
+and mission management. Includes web dashboard for real-time
+monitoring and control.
 """
 
 from __future__ import annotations
@@ -11,16 +12,22 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import structlog
 
 from drone_flight_core.core.config import DroneConfig, GroundStationConfig
 from drone_flight_core.core.state_machine import FlightStateMachine, FlightState
 from drone_flight_core.core.safety import SafetyMonitor
+
+# Get the static files directory
+STATIC_DIR = Path(__file__).parent / "static"
 
 logger = structlog.get_logger(__name__)
 
@@ -92,31 +99,78 @@ class ConnectionManager:
     """Manages WebSocket connections for real-time updates."""
 
     def __init__(self) -> None:
-        self.active_connections: list[WebSocket] = []
+        # Separate connection pools for different purposes
+        self.telemetry_connections: list[WebSocket] = []
+        self.video_connections: list[WebSocket] = []
+        self.command_connections: list[WebSocket] = []
+        self.active_connections: list[WebSocket] = []  # Legacy/general
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(
+        self, websocket: WebSocket, connection_type: str = "general"
+    ) -> None:
         """Accept new WebSocket connection."""
         await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info("WebSocket connected", total=len(self.active_connections))
+
+        if connection_type == "telemetry":
+            self.telemetry_connections.append(websocket)
+            logger.info("Telemetry WebSocket connected", total=len(self.telemetry_connections))
+        elif connection_type == "video":
+            self.video_connections.append(websocket)
+            logger.info("Video WebSocket connected", total=len(self.video_connections))
+        elif connection_type == "commands":
+            self.command_connections.append(websocket)
+            logger.info("Commands WebSocket connected", total=len(self.command_connections))
+        else:
+            self.active_connections.append(websocket)
+            logger.info("WebSocket connected", total=len(self.active_connections))
 
     def disconnect(self, websocket: WebSocket) -> None:
-        """Remove WebSocket connection."""
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info("WebSocket disconnected", total=len(self.active_connections))
+        """Remove WebSocket connection from all pools."""
+        for pool in [
+            self.telemetry_connections,
+            self.video_connections,
+            self.command_connections,
+            self.active_connections,
+        ]:
+            if websocket in pool:
+                pool.remove(websocket)
+        logger.debug("WebSocket disconnected")
 
-    async def broadcast(self, message: dict) -> None:
-        """Broadcast message to all connected clients."""
-        if not self.active_connections:
+    async def broadcast(self, message: dict, connection_type: str = "general") -> None:
+        """Broadcast message to connected clients."""
+        if connection_type == "telemetry":
+            connections = self.telemetry_connections
+        elif connection_type == "video":
+            connections = self.video_connections
+        elif connection_type == "commands":
+            connections = self.command_connections
+        else:
+            connections = self.active_connections
+
+        if not connections:
             return
 
         message_json = json.dumps(message)
         disconnected = []
 
-        for connection in self.active_connections:
+        for connection in connections:
             try:
                 await connection.send_text(message_json)
+            except Exception:
+                disconnected.append(connection)
+
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    async def broadcast_video_frame(self, frame_data: bytes) -> None:
+        """Broadcast video frame to video connections."""
+        if not self.video_connections:
+            return
+
+        disconnected = []
+        for connection in self.video_connections:
+            try:
+                await connection.send_bytes(frame_data)
             except Exception:
                 disconnected.append(connection)
 
@@ -147,6 +201,17 @@ class GroundStation:
         # Telemetry cache
         self._telemetry: dict = {}
         self._telemetry_lock = asyncio.Lock()
+
+        # Missions storage
+        self._missions: dict[str, dict] = {}
+        self._current_mission: str | None = None
+
+        # Alerts storage
+        self._alerts: list[dict] = []
+        self._alert_counter = 0
+
+        # Detections cache
+        self._active_detections: dict[int, dict] = {}
 
         # Background tasks
         self._broadcast_task: asyncio.Task | None = None
@@ -199,10 +264,16 @@ class GroundStation:
             try:
                 telemetry = await self.get_telemetry()
                 if telemetry:
-                    await self._connection_manager.broadcast({
-                        "type": "telemetry",
-                        "data": telemetry,
-                    })
+                    # Broadcast to dedicated telemetry connections
+                    await self._connection_manager.broadcast(
+                        {"type": "telemetry", "data": telemetry},
+                        connection_type="telemetry",
+                    )
+                    # Also broadcast to legacy connections
+                    await self._connection_manager.broadcast(
+                        {"type": "telemetry", "data": telemetry},
+                        connection_type="general",
+                    )
                 await asyncio.sleep(0.1)  # 10 Hz broadcast rate
 
             except asyncio.CancelledError:
@@ -222,6 +293,103 @@ class GroundStation:
             "gps_fix": self._telemetry.get("system", {}).get("gps_fix", False),
             "timestamp": datetime.now().isoformat(),
         }
+
+    # Mission management methods
+
+    def add_mission(self, mission_id: str, mission_data: dict) -> None:
+        """Add or update a mission."""
+        self._missions[mission_id] = mission_data
+        logger.info("Mission added", mission_id=mission_id)
+
+    def get_mission(self, mission_id: str) -> dict | None:
+        """Get a mission by ID."""
+        return self._missions.get(mission_id)
+
+    def get_all_missions(self) -> list[dict]:
+        """Get all missions."""
+        return [
+            {"id": mid, "name": m.get("name", mid), **m}
+            for mid, m in self._missions.items()
+        ]
+
+    def delete_mission(self, mission_id: str) -> bool:
+        """Delete a mission."""
+        if mission_id in self._missions:
+            del self._missions[mission_id]
+            return True
+        return False
+
+    # Alert management methods
+
+    async def create_alert(
+        self,
+        alert_type: str,
+        severity: str,
+        title: str,
+        message: str,
+        **kwargs,
+    ) -> dict:
+        """Create and broadcast an alert."""
+        self._alert_counter += 1
+        alert = {
+            "id": f"alert_{self._alert_counter:06d}",
+            "type": alert_type,
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "acknowledged": False,
+            **kwargs,
+        }
+        self._alerts.append(alert)
+
+        # Keep only last 1000 alerts
+        if len(self._alerts) > 1000:
+            self._alerts = self._alerts[-1000:]
+
+        # Broadcast alert
+        await self._connection_manager.broadcast(
+            {"type": "alert", "data": alert},
+            connection_type="telemetry",
+        )
+
+        return alert
+
+    def get_alerts(
+        self, unacknowledged_only: bool = False, limit: int = 100
+    ) -> list[dict]:
+        """Get alerts."""
+        alerts = self._alerts
+        if unacknowledged_only:
+            alerts = [a for a in alerts if not a.get("acknowledged")]
+        return list(reversed(alerts[-limit:]))
+
+    def acknowledge_alert(self, alert_id: str) -> bool:
+        """Acknowledge an alert."""
+        for alert in self._alerts:
+            if alert["id"] == alert_id:
+                alert["acknowledged"] = True
+                return True
+        return False
+
+    # Detection management
+
+    async def update_detection(self, track_id: int, detection_data: dict) -> None:
+        """Update active detection and broadcast."""
+        self._active_detections[track_id] = {
+            **detection_data,
+            "last_seen": datetime.now().isoformat(),
+        }
+
+        # Broadcast detection update
+        await self._connection_manager.broadcast(
+            {"type": "detection", "data": detection_data},
+            connection_type="telemetry",
+        )
+
+    def get_active_detections(self) -> list[dict]:
+        """Get all active detections."""
+        return list(self._active_detections.values())
 
 
 def create_app(
@@ -422,56 +590,189 @@ def create_app(
             "timestamp": datetime.now().isoformat(),
         }
 
-    # ============== WebSocket Endpoint ==============
+    # ============== Mission Endpoints ==============
 
-    @app.websocket(gs_config.websocket_path)
-    async def websocket_endpoint(websocket: WebSocket):
-        """
-        WebSocket endpoint for real-time updates.
+    @app.get(f"{gs_config.api_prefix}/missions")
+    async def get_missions(gs: GroundStation = Depends(get_gs)) -> list[dict]:
+        """Get all missions."""
+        return gs.get_all_missions()
 
-        Sends:
-        - Telemetry updates at 10 Hz
-        - State change notifications
-        - Detection events
-        """
+    @app.get(f"{gs_config.api_prefix}/missions/{{mission_id}}")
+    async def get_mission(mission_id: str, gs: GroundStation = Depends(get_gs)) -> dict:
+        """Get a specific mission."""
+        mission = gs.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(status_code=404, detail="Mission not found")
+        return {"id": mission_id, **mission}
+
+    @app.post(f"{gs_config.api_prefix}/missions")
+    async def create_mission(
+        request: MissionRequest,
+        gs: GroundStation = Depends(get_gs),
+    ) -> dict:
+        """Create a new mission."""
+        import uuid
+        mission_id = str(uuid.uuid4())[:8]
+        gs.add_mission(mission_id, {
+            "name": request.name,
+            "waypoints": request.waypoints,
+            "created_at": datetime.now().isoformat(),
+        })
+        return {"id": mission_id, "name": request.name}
+
+    @app.delete(f"{gs_config.api_prefix}/missions/{{mission_id}}")
+    async def delete_mission(
+        mission_id: str,
+        gs: GroundStation = Depends(get_gs),
+    ) -> dict:
+        """Delete a mission."""
+        if gs.delete_mission(mission_id):
+            return {"status": "deleted", "mission_id": mission_id}
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    # ============== Alert Endpoints ==============
+
+    @app.get(f"{gs_config.api_prefix}/alerts")
+    async def get_alerts(
+        unacknowledged: bool = False,
+        limit: int = 100,
+        gs: GroundStation = Depends(get_gs),
+    ) -> list[dict]:
+        """Get alerts."""
+        return gs.get_alerts(unacknowledged_only=unacknowledged, limit=limit)
+
+    @app.post(f"{gs_config.api_prefix}/alerts/{{alert_id}}/acknowledge")
+    async def acknowledge_alert(
+        alert_id: str,
+        gs: GroundStation = Depends(get_gs),
+    ) -> dict:
+        """Acknowledge an alert."""
+        if gs.acknowledge_alert(alert_id):
+            return {"status": "acknowledged", "alert_id": alert_id}
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    # ============== Detection Endpoints ==============
+
+    @app.get(f"{gs_config.api_prefix}/detections")
+    async def get_detections(gs: GroundStation = Depends(get_gs)) -> list[dict]:
+        """Get active detections."""
+        return gs.get_active_detections()
+
+    # ============== WebSocket Endpoints ==============
+
+    @app.websocket("/ws/telemetry")
+    async def ws_telemetry(websocket: WebSocket):
+        """WebSocket endpoint for telemetry updates."""
         gs = app.state.ground_station
-        await gs.connection_manager.connect(websocket)
+        await gs.connection_manager.connect(websocket, "telemetry")
 
         try:
             while True:
-                # Receive messages from client
+                # Keep connection alive, handle ping/pong
                 data = await websocket.receive_text()
-
                 try:
                     message = json.loads(data)
-                    msg_type = message.get("type", "")
-
-                    if msg_type == "ping":
+                    if message.get("type") == "ping":
                         await gs.connection_manager.send_personal(
                             websocket,
                             {"type": "pong", "timestamp": datetime.now().isoformat()},
                         )
+                except json.JSONDecodeError:
+                    pass
+        except WebSocketDisconnect:
+            gs.connection_manager.disconnect(websocket)
 
-                    elif msg_type == "subscribe":
-                        # Handle subscription requests
-                        topics = message.get("topics", [])
+    @app.websocket("/ws/video")
+    async def ws_video(websocket: WebSocket):
+        """WebSocket endpoint for video streaming."""
+        gs = app.state.ground_station
+        await gs.connection_manager.connect(websocket, "video")
+
+        try:
+            while True:
+                # Handle stream requests from client
+                data = await websocket.receive_text()
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "stream_request":
+                        camera = message.get("camera", "rgb")
+                        # Acknowledge stream request
                         await gs.connection_manager.send_personal(
                             websocket,
-                            {"type": "subscribed", "topics": topics},
+                            {
+                                "type": "video_info",
+                                "data": {
+                                    "camera": camera,
+                                    "width": 640,
+                                    "height": 480,
+                                    "fps": 30,
+                                },
+                            },
                         )
+                except json.JSONDecodeError:
+                    pass
+        except WebSocketDisconnect:
+            gs.connection_manager.disconnect(websocket)
 
-                    elif msg_type == "command":
-                        # Handle commands via WebSocket
-                        command = message.get("command", "")
+    @app.websocket("/ws/commands")
+    async def ws_commands(websocket: WebSocket):
+        """WebSocket endpoint for command handling."""
+        gs = app.state.ground_station
+        await gs.connection_manager.connect(websocket, "commands")
+
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "command":
+                        command = message.get("command", "").upper()
                         params = message.get("params", {})
 
-                        # Process command (simplified)
+                        # Process command
+                        success = True
+                        error_msg = ""
+
+                        try:
+                            if command == "ARM":
+                                await gs.state_machine.arm()
+                            elif command == "DISARM":
+                                await gs.state_machine.disarm()
+                            elif command == "TAKEOFF":
+                                altitude = params.get("altitude", 10)
+                                await gs.state_machine.takeoff(
+                                    reason=f"Takeoff to {altitude}m"
+                                )
+                            elif command == "LAND":
+                                await gs.state_machine.land()
+                            elif command == "RTH":
+                                await gs.state_machine.return_to_home()
+                            elif command == "HOLD":
+                                await gs.state_machine.transition_to(
+                                    FlightState.HOVER, "Hold command"
+                                )
+                            elif command == "EMERGENCY_LAND":
+                                await gs.state_machine.emergency_land()
+                            elif command == "EMERGENCY_STOP":
+                                await gs.state_machine.emergency_stop()
+                            else:
+                                # Other commands just acknowledge
+                                pass
+                        except Exception as e:
+                            success = False
+                            error_msg = str(e)
+
+                        # Send acknowledgment
                         await gs.connection_manager.send_personal(
                             websocket,
                             {
                                 "type": "command_ack",
-                                "command": command,
-                                "status": "received",
+                                "data": {
+                                    "command": command,
+                                    "success": success,
+                                    "message": "Command executed" if success else "",
+                                    "error": error_msg,
+                                },
                             },
                         )
 
@@ -483,6 +784,59 @@ def create_app(
 
         except WebSocketDisconnect:
             gs.connection_manager.disconnect(websocket)
+
+    # Legacy WebSocket endpoint for backwards compatibility
+    @app.websocket(gs_config.websocket_path)
+    async def websocket_endpoint(websocket: WebSocket):
+        """Legacy WebSocket endpoint for real-time updates."""
+        gs = app.state.ground_station
+        await gs.connection_manager.connect(websocket)
+
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    message = json.loads(data)
+                    msg_type = message.get("type", "")
+
+                    if msg_type == "ping":
+                        await gs.connection_manager.send_personal(
+                            websocket,
+                            {"type": "pong", "timestamp": datetime.now().isoformat()},
+                        )
+                    elif msg_type == "command":
+                        command = message.get("command", "")
+                        await gs.connection_manager.send_personal(
+                            websocket,
+                            {
+                                "type": "command_ack",
+                                "command": command,
+                                "status": "received",
+                            },
+                        )
+                except json.JSONDecodeError:
+                    await gs.connection_manager.send_personal(
+                        websocket,
+                        {"type": "error", "message": "Invalid JSON"},
+                    )
+
+        except WebSocketDisconnect:
+            gs.connection_manager.disconnect(websocket)
+
+    # ============== Static Files & Dashboard ==============
+
+    # Serve the main dashboard at root
+    @app.get("/")
+    async def serve_dashboard():
+        """Serve the ground station dashboard."""
+        index_path = STATIC_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    # Mount static files (must be after specific routes)
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     return app
 
