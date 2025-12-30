@@ -1,10 +1,40 @@
-"""Navigation and flight control modules.
+"""Navigation and mission execution modules.
 
-This module will contain:
-- Waypoint navigation
-- Path planning
-- Tracking patterns (hover, orbit)
-- Position controllers
+Provides:
+- Waypoint mission execution
+- Patrol flight patterns
+- Detection-triggered monitoring
+- Alert system for ground station
 """
 
-# Placeholder for future navigation modules
+from drone_flight_core.navigation.mission_executor import (
+    MissionExecutor,
+    Mission,
+    MissionType,
+    MissionState,
+    MissionWaypoint,
+    WaypointAction,
+    DetectionEvent,
+    create_patrol_mission,
+)
+from drone_flight_core.navigation.alerts import (
+    AlertManager,
+    Alert,
+    AlertType,
+    AlertSeverity,
+)
+
+__all__ = [
+    "MissionExecutor",
+    "Mission",
+    "MissionType",
+    "MissionState",
+    "MissionWaypoint",
+    "WaypointAction",
+    "DetectionEvent",
+    "create_patrol_mission",
+    "AlertManager",
+    "Alert",
+    "AlertType",
+    "AlertSeverity",
+]

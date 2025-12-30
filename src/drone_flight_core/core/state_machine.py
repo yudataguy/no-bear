@@ -37,9 +37,11 @@ class FlightState(Enum):
     WAYPOINT = auto()
 
     # Mission states
-    SEARCHING = auto()
-    TRACKING = auto()
-    ORBITING = auto()
+    PATROL = auto()  # Autonomous patrol flight
+    SEARCHING = auto()  # Searching for targets
+    TRACKING = auto()  # Actively tracking target
+    ORBITING = auto()  # Orbiting around target
+    MONITORING = auto()  # Monitoring detected target for confirmation
 
     # Safety states
     RETURN_TO_HOME = auto()
@@ -90,6 +92,7 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
         FlightState.MANUAL,
         FlightState.NAVIGATING,
         FlightState.WAYPOINT,
+        FlightState.PATROL,
         FlightState.SEARCHING,
         FlightState.TRACKING,
         FlightState.ORBITING,
@@ -101,6 +104,7 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
     FlightState.MANUAL: {
         FlightState.HOVER,
         FlightState.NAVIGATING,
+        FlightState.PATROL,
         FlightState.LANDING,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -110,7 +114,9 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
     FlightState.NAVIGATING: {
         FlightState.HOVER,
         FlightState.WAYPOINT,
+        FlightState.PATROL,
         FlightState.SEARCHING,
+        FlightState.MONITORING,
         FlightState.MANUAL,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -119,7 +125,19 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
     FlightState.WAYPOINT: {
         FlightState.HOVER,
         FlightState.NAVIGATING,
+        FlightState.PATROL,
         FlightState.SEARCHING,
+        FlightState.MONITORING,
+        FlightState.MANUAL,
+        FlightState.RETURN_TO_HOME,
+        FlightState.EMERGENCY_LAND,
+        FlightState.FAULT,
+    },
+    FlightState.PATROL: {
+        FlightState.HOVER,
+        FlightState.NAVIGATING,
+        FlightState.SEARCHING,
+        FlightState.MONITORING,  # Detection triggered
         FlightState.MANUAL,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -127,8 +145,20 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
     },
     FlightState.SEARCHING: {
         FlightState.TRACKING,
+        FlightState.MONITORING,
         FlightState.HOVER,
         FlightState.NAVIGATING,
+        FlightState.PATROL,  # Resume patrol
+        FlightState.MANUAL,
+        FlightState.RETURN_TO_HOME,
+        FlightState.EMERGENCY_LAND,
+        FlightState.FAULT,
+    },
+    FlightState.MONITORING: {
+        FlightState.TRACKING,  # Confirmed, start tracking
+        FlightState.PATROL,  # Not confirmed, resume patrol
+        FlightState.NAVIGATING,  # Resume navigation
+        FlightState.HOVER,
         FlightState.MANUAL,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -138,6 +168,8 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
         FlightState.ORBITING,
         FlightState.HOVER,
         FlightState.SEARCHING,
+        FlightState.MONITORING,
+        FlightState.PATROL,  # Resume patrol after tracking
         FlightState.MANUAL,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -147,6 +179,7 @@ VALID_TRANSITIONS: dict[FlightState, set[FlightState]] = {
         FlightState.TRACKING,
         FlightState.HOVER,
         FlightState.SEARCHING,
+        FlightState.PATROL,  # Resume patrol
         FlightState.MANUAL,
         FlightState.RETURN_TO_HOME,
         FlightState.EMERGENCY_LAND,
@@ -428,6 +461,53 @@ class FlightStateMachine:
         """Enter fault state."""
         return await self.transition_to(FlightState.FAULT, reason, force=True)
 
+    async def start_patrol(
+        self, reason: str = "Patrol mission started"
+    ) -> StateTransition:
+        """Start patrol flight mode."""
+        return await self.transition_to(FlightState.PATROL, reason)
+
+    async def enter_monitoring(
+        self, reason: str = "Detection triggered monitoring"
+    ) -> StateTransition:
+        """Enter monitoring mode for detection confirmation."""
+        return await self.transition_to(FlightState.MONITORING, reason)
+
+    async def start_tracking(
+        self, reason: str = "Target confirmed, tracking started"
+    ) -> StateTransition:
+        """Start tracking a confirmed target."""
+        return await self.transition_to(FlightState.TRACKING, reason)
+
+    async def resume_patrol(
+        self, reason: str = "Resuming patrol"
+    ) -> StateTransition:
+        """Resume patrol after monitoring/tracking."""
+        return await self.transition_to(FlightState.PATROL, reason)
+
+    @property
+    def is_on_mission(self) -> bool:
+        """Check if drone is executing an autonomous mission."""
+        mission_states = {
+            FlightState.PATROL,
+            FlightState.WAYPOINT,
+            FlightState.NAVIGATING,
+            FlightState.SEARCHING,
+            FlightState.MONITORING,
+            FlightState.TRACKING,
+            FlightState.ORBITING,
+        }
+        return self._state in mission_states
+
+    @property
+    def is_monitoring_or_tracking(self) -> bool:
+        """Check if drone is in detection response mode."""
+        return self._state in {
+            FlightState.MONITORING,
+            FlightState.TRACKING,
+            FlightState.ORBITING,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Export state machine status as dictionary."""
         return {
@@ -436,6 +516,8 @@ class FlightStateMachine:
             "state_duration_seconds": self.state_duration_seconds,
             "is_flying": self.is_flying,
             "is_emergency": self.is_emergency,
+            "is_on_mission": self.is_on_mission,
+            "is_monitoring_or_tracking": self.is_monitoring_or_tracking,
             "valid_transitions": [s.name for s in self.get_valid_transitions()],
             "transition_count": len(self._transition_history),
         }
